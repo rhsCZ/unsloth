@@ -1388,3 +1388,147 @@ def test_measuring_pass_does_not_recompile_the_real_pass(af, sr, monkeypatch, tm
         == graphs["in_backward", "exact"]
         == graphs["0", "estimate"]
     ), graphs
+
+
+def _two_linears(
+    af,
+    batch_bytes = None,
+    max_grad_norm = 0.0,
+):
+    torch.manual_seed(0)
+    model = torch.nn.Sequential(torch.nn.Linear(8, 8), torch.nn.Linear(8, 4))
+    base = torch.optim.AdamW(model.parameters(), lr = 1e-3)
+    wrapper = af.InBackwardOptimizer(
+        base, model = model, batch_bytes = batch_bytes, max_grad_norm = max_grad_norm
+    )
+    return model, base, wrapper
+
+
+def _fail_once(
+    base,
+    at = 1,
+    when = lambda: True,
+):
+    """The base optimizer's `at`-th step (counting those where `when()` holds) raises an out-of-memory error."""
+    seen = []
+
+    def hook(_opt, _args, _kwargs):
+        if when():
+            seen.append(1)
+            if len(seen) == at:
+                raise RuntimeError("CUDA out of memory. (injected)")
+
+    base.register_step_pre_hook(hook)
+    return seen
+
+
+def test_a_step_that_raises_leaves_the_next_step_clean(af):
+    """An error inside step() (an OOM in an update, a step hook raising) ends that step: the next backward and
+    step run as after a completed step, instead of reporting every weight as a second gradient."""
+    model, base, wrapper = _two_linears(af, max_grad_norm = 1.0)
+    model(torch.randn(2, 8)).sum().backward()  # unarmed: step() steps every weight
+    wrapper.step()
+    reference = wrapper._prev_total
+    late = wrapper.late_steps
+    seen = _fail_once(base)
+    model(torch.randn(2, 8)).sum().backward()
+    with pytest.raises(RuntimeError, match = "injected"):
+        wrapper.step()
+    assert seen == [1]
+    assert not wrapper._done and not wrapper._norm_sq and not wrapper._cur_sq
+    assert wrapper._prev_total is reference  # the previous step's norms stay the reference
+    assert wrapper.late_steps == late  # nothing of the aborted step is counted
+    model.zero_grad()  # what the Trainer calls (never optimizer.zero_grad())
+    model(torch.randn(2, 8)).sum().backward()
+    wrapper.step()
+    assert all(p.grad is None for p in model.parameters())
+    assert wrapper.late_steps == late + 4
+
+
+def test_a_flush_that_raises_leaves_the_next_step_clean(af):
+    """accelerator.clip_grad_norm_ runs flush() before optimizer.step(): an error there ends the step too."""
+    model, base, wrapper = _two_linears(af, max_grad_norm = 1.0)
+    model(torch.randn(2, 8)).sum().backward()
+    _fail_once(base)
+    with pytest.raises(RuntimeError, match = "injected"):
+        wrapper.flush()
+    model.zero_grad()
+    with wrapper.armed():
+        model(torch.randn(2, 8)).sum().backward()
+    wrapper.flush()
+    wrapper.step()
+    assert all(p.grad is None for p in model.parameters())
+
+
+@pytest.mark.parametrize("batch_bytes", [0, None])
+def test_a_batch_that_raises_inside_backward_leaves_a_clean_retry(af, batch_bytes):
+    """A batch stepped inside backward raises (batch_bytes = 0: in the hook, after one weight was stepped; else in
+    the end-of-backward callback). Handled inside the armed region, the micro-batch runs again without
+    tripping the second-gradient check, and its weights are stepped."""
+    model, base, wrapper = _two_linears(af, batch_bytes = batch_bytes)
+    seen = _fail_once(base, at = 2 if batch_bytes == 0 else 1)
+    with wrapper.armed():
+        with pytest.raises(RuntimeError, match = "injected"):
+            model(torch.randn(2, 8)).sum().backward()
+        assert not wrapper._done and not wrapper._pending and not wrapper._queued
+        model.zero_grad()
+        before = [p.detach().clone() for p in model.parameters()]
+        model(torch.randn(2, 8)).sum().backward()
+    wrapper.step()
+    assert len(seen) > 1
+    assert all(p.grad is None for p in model.parameters())
+    assert all(not torch.equal(b, p) for b, p in zip(before, model.parameters()))
+
+
+def test_a_real_second_gradient_is_still_reported(af):
+    """Two backwards before one step still raise (in the hook, or at step() when one armed region sees the
+    modules twice), and the step after that error is clean."""
+    model, base, wrapper = _two_linears(af, batch_bytes = 0)
+    with wrapper.armed():
+        model(torch.randn(2, 8)).sum().backward()
+    with pytest.raises(RuntimeError, match = "second gradient"):
+        with wrapper.armed():
+            model(torch.randn(2, 8)).sum().backward()
+    model.zero_grad()
+    wrapper.zero_grad()
+    with wrapper.armed():
+        model(torch.randn(2, 8)).sum().backward()
+        model(torch.randn(2, 8)).sum().backward()
+    with pytest.raises(RuntimeError, match = "second gradient"):
+        wrapper.step()
+    model.zero_grad()
+    with wrapper.armed():
+        model(torch.randn(2, 8)).sum().backward()
+    wrapper.step()
+    assert all(p.grad is None for p in model.parameters())
+
+
+def test_train_again_after_an_out_of_memory_step(af, sr, monkeypatch, tmp_path):
+    """A notebook rerun: the first train() runs out of memory in its second step's end-of-step update; train()
+    again keeps the Trainer's optimizer and trains, instead of failing its first backward."""
+    from transformers import TrainerCallback
+
+    trainers, seen = [], []
+
+    class Inject(TrainerCallback):
+        def on_train_begin(self, args, state, control, **kwargs):
+            trainer = trainers[0]
+            if not seen:
+                when = lambda: not af._in_backward_pass() and trainer.state.global_step == 1
+                seen.append(_fail_once(trainer._unsloth_in_backward_optimizer.optimizer, when = when))
+
+    original = af.install_auto_fit_optimizer
+
+    def install(trainer):
+        trainers.append(trainer)
+        trainer.add_callback(Inject())
+        return original(trainer)
+
+    monkeypatch.setattr(af, "install_auto_fit_optimizer", install)
+    with pytest.raises(RuntimeError, match = "injected"):
+        _train(af, sr, _tiny_model(), monkeypatch, "in_backward", 1.0, tmp_path = tmp_path)
+    trainer = trainers[0]
+    first = trainer.optimizer
+    assert seen[0] == [1] and trainer.state.global_step == 1
+    trainer.train()
+    assert trainer.optimizer is first and trainer.state.global_step == 4

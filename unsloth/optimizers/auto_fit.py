@@ -556,6 +556,13 @@ class InBackwardOptimizer(torch.optim.Optimizer):
         self._pending_bytes = 0
         self._queued = set()
 
+    def _abort(self):
+        """An exception ended this step (an OOM in a batch's update, a step hook raising): the weights stepped so
+        far stay stepped, and its bookkeeping is dropped, so the next backward starts clean, as after step().
+        Gradients not stepped yet stay in .grad, as with any torch optimizer whose step raised."""
+        self._known_sq = None
+        self._reset()
+
     def zero_grad(self, set_to_none = True):
         self._reset()
         return self.optimizer.zero_grad(set_to_none = set_to_none)
@@ -566,7 +573,11 @@ class InBackwardOptimizer(torch.optim.Optimizer):
         def hook(p):
             opt = ref()
             if opt is not None and opt._armed and _ACTIVE.get(id(p)) is opt:
-                opt._ready(p)
+                try:
+                    opt._ready(p)
+                except BaseException:
+                    opt._abort()
+                    raise
 
         for group in self.param_groups:
             for p in group["params"]:
@@ -771,7 +782,11 @@ class InBackwardOptimizer(torch.optim.Optimizer):
             opt = ref()
             if opt is not None:
                 opt._queued.discard(task)
-                opt._flush_pending()
+                try:
+                    opt._flush_pending()
+                except BaseException:
+                    opt._abort()
+                    raise
 
         if not _queue_callback(flush_at_end_of_task):
             return False
@@ -899,8 +914,6 @@ class InBackwardOptimizer(torch.optim.Optimizer):
                     g.mul_(coef.to(g.dtype))
 
     def _step_only(self, params):
-        for p in params:
-            self._done.add(id(p))
         with _no_global_step_hooks():
             if self._kind == "bitsandbytes":
                 for p in params:
@@ -908,6 +921,8 @@ class InBackwardOptimizer(torch.optim.Optimizer):
                     self._step_bitsandbytes(gi, pi, p)
             else:
                 self._step_torch(params)
+        # Only once they are stepped: a step that raises leaves no weight marked as stepped.
+        self._done.update(id(p) for p in params)
         self._free_grads(params)
 
     def _free_grads(self, params):
@@ -961,7 +976,17 @@ class InBackwardOptimizer(torch.optim.Optimizer):
 
     def flush(self):
         """Step the weights left for the end: the last batch, reused ones, and gradients that reached .grad
-        without a hook. Every gradient of the step is known by now, so these are clipped with the exact norm."""
+        without a hook. Every gradient of the step is known by now, so these are clipped with the exact norm.
+        An exception aborts the step (see _abort)."""
+        late, deferred = self.late_steps, self.deferred_steps
+        try:
+            self._flush()
+        except BaseException:
+            self.late_steps, self.deferred_steps = late, deferred
+            self._abort()
+            raise
+
+    def _flush(self):
         left = [p for p in self._pending if p.grad is not None and self._locate(p) is not None]
         waiting = {id(p) for p in left}
         self._pending, self._pending_ids, self._pending_bytes = [], set(), 0
@@ -1003,10 +1028,14 @@ class InBackwardOptimizer(torch.optim.Optimizer):
     @torch.no_grad()
     def step(self, closure = None):
         loss = None
-        if closure is not None:
-            with torch.enable_grad():
-                loss = closure()
-        self.flush()
+        try:
+            if closure is not None:
+                with torch.enable_grad():
+                    loss = closure()
+            self.flush()
+        except BaseException:
+            self._abort()  # the previous step's norms stay the reference
+            raise
         self.hook_steps += len(self._done)
         total = self._total_sq()
         if total is not None:

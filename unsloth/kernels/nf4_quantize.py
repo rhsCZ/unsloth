@@ -17,11 +17,13 @@ import torch
 import triton
 import triton.language as tl
 
+from ..rocm_build import is_rocm_torch
 from .triton_launch import tag_compile_cache
 
 __all__ = ["quantize_4bit_triton", "quantize_8bit_triton"]
 
-_EXACT = torch.version.hip is None and os.environ.get("TRITON_INTERPRET", "0") != "1"
+# A +rocm build that leaves torch.version.hip unset must still take the IEEE path: the inline asm is PTX.
+_EXACT = not is_rocm_torch(torch) and os.environ.get("TRITON_INTERPRET", "0") != "1"
 
 
 @triton.jit

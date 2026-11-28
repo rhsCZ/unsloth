@@ -7,7 +7,21 @@ missing native library apart from a loaded one."""
 
 import torch
 
-HIP_ENVIRONMENT = torch.version.hip is not None
+
+def _is_rocm_torch(torch):
+    # Inlined, not imported: this stands in for bitsandbytes, which can be imported before unsloth. The +rocm
+    # version tag backs up a build that leaves torch.version.hip unset.
+    if getattr(torch.version, "hip", None):
+        return True
+    version = getattr(torch, "__version__", None)
+    if type(version) is not str:
+        version = getattr(getattr(torch, "version", None), "__version__", None)
+    if type(version) is not str:
+        version = str(version or "")
+    return "rocm" in version.lower()
+
+
+HIP_ENVIRONMENT = _is_rocm_torch(torch)
 ROCM_WARP_SIZE_64 = False
 BNB_BACKEND = "Unsloth"
 

@@ -12,13 +12,20 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 # A raw torch.version.hip read here is a regression. An inlined `_is_rocm_torch` helper may read it.
 _GUARDED = (
+    "unsloth/bnb_shim/__init__.py",
+    "unsloth/bnb_shim/bitsandbytes/_quantize.py",
+    "unsloth/bnb_shim/bitsandbytes/cextension.py",
     "unsloth/kernels/fp8.py",
     "unsloth/kernels/int4_packed.py",
+    "unsloth/kernels/int8_lora.py",
     "unsloth/kernels/large_head_attention.py",
     "unsloth/kernels/multi_lora.py",
+    "unsloth/kernels/nf4_quantize.py",
     "unsloth/kernels/nvfp4.py",
     "unsloth/models/_uma_safetensors.py",
     "unsloth/models/_windows_safetensors.py",
+    "unsloth/models/float8_training.py",
+    "unsloth/parallel_auto.py",
 )
 _HELPERS = {"is_rocm_torch", "_is_rocm_torch"}
 
@@ -85,6 +92,9 @@ def test_is_rocm_torch_sees_sdk_wheels_without_version_hip():
         _load("unsloth/rocm_build.py").is_rocm_torch,
         _load("unsloth/models/_uma_safetensors.py")._is_rocm_torch,
         _load("unsloth/models/_windows_safetensors.py")._is_rocm_torch,
+        _load("unsloth/models/float8_training.py")._is_rocm_torch,
+        _load("unsloth/bnb_shim/bitsandbytes/cextension.py")._is_rocm_torch,
+        _load("unsloth/bnb_shim/__init__.py")._is_rocm_torch,
     ]
     for is_rocm in helpers:
         assert is_rocm(_torch(None, "2.11.0+rocm7.14.0"))
@@ -110,3 +120,18 @@ def test_is_rocm_torch_traces_under_fullgraph():
 
         x = torch.zeros(2)
         assert torch.equal(torch.compile(fn, backend = "eager", fullgraph = True)(x), fn(x))
+
+
+def test_nf4_quantize_takes_the_ieee_path_on_rocm_tagged_builds():
+    # _EXACT selects PTX inline asm at import; a +rocm build with torch.version.hip unset must not take it.
+    import os
+
+    source = (ROOT / "unsloth/kernels/nf4_quantize.py").read_text(encoding = "utf-8")
+    line = next(l for l in source.splitlines() if l.startswith("_EXACT = "))
+    env = {"torch": _torch(None, "2.11.0+rocm7.14.0"), "os": os}
+    env["is_rocm_torch"] = _load("unsloth/rocm_build.py").is_rocm_torch
+    exec(line, env)
+    assert env["_EXACT"] is False
+    env["torch"] = _torch(None, "2.11.0+cu130")
+    exec(line, env)
+    assert env["_EXACT"] is (os.environ.get("TRITON_INTERPRET", "0") != "1")

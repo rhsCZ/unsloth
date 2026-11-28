@@ -24,6 +24,7 @@ from typing import Optional
 
 import torch
 
+from ..rocm_build import is_rocm_torch
 from . import fp8_lora as _fp8
 from .fp8_lora import (
     Fp8LoRABaseState,
@@ -203,7 +204,7 @@ def int8_lora_supported(device) -> Optional[str]:
     device = torch.device(device)
     if triton is None:
         return "Triton is not installed (on Windows: pip install triton-windows)"
-    if device.type != "cuda" or torch.version.hip is not None:
+    if device.type != "cuda" or is_rocm_torch(torch):
         return f"needs an NVIDIA GPU (got {device})"
     if torch.cuda.get_device_capability(device) < (8, 0):
         return "needs int8 tensor cores with Triton int8 dot support (compute capability 8.0+)"

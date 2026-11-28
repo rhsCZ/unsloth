@@ -20,6 +20,8 @@ import struct
 
 import torch
 
+from .cextension import _is_rocm_torch
+
 __all__ = [
     "NF4_CODE",
     "FP4_CODE",
@@ -331,7 +333,7 @@ def triton_quantize_available(device = None):
             from unsloth.kernels import nf4_quantize
             _KERNELS = nf4_quantize
             _TRITON = torch.cuda.is_available() and (
-                torch.version.hip is not None
+                _is_rocm_torch(torch)
                 or all(
                     torch.cuda.get_device_capability(i)[0] >= 7
                     for i in range(torch.cuda.device_count())

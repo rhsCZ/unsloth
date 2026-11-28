@@ -145,9 +145,9 @@ def _fp8_kept_on_load():
     (and CPU) has transformers dequantize them to 16-bit on load (verify_fp8_support_if_applicable)."""
     try:
         import torch
-        if getattr(torch.version, "hip", None) or (
-            hasattr(torch, "xpu") and torch.xpu.is_available()
-        ):
+        from .rocm_build import is_rocm_torch
+
+        if is_rocm_torch(torch) or (hasattr(torch, "xpu") and torch.xpu.is_available()):
             return True
         if torch.cuda.is_available():
             major, minor = torch.cuda.get_device_capability(_local_cuda_device(torch))

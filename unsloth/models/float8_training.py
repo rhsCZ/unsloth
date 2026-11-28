@@ -11,6 +11,20 @@ from functools import lru_cache
 import torch
 
 
+def _is_rocm_torch(torch):
+    # Inlined, not imported: gloo test workers load this file standalone. The +rocm version tag backs up a build
+    # that leaves torch.version.hip unset.
+    if getattr(torch.version, "hip", None):
+        return True
+    # Never str() a TorchVersion (torch.__version__): Dynamo cannot trace its C str() under fullgraph.
+    version = getattr(torch, "__version__", None)
+    if type(version) is not str:
+        version = getattr(getattr(torch, "version", None), "__version__", None)
+    if type(version) is not str:
+        version = str(version or "")
+    return "rocm" in version.lower()
+
+
 def _load_precision():
     """unsloth.precision; also when this file is loaded on its own (gloo test workers import it by path
     without the unsloth package), from the sibling directory."""
@@ -282,13 +296,13 @@ def _check_hardware(
         )
     major, minor = torch.cuda.get_device_capability(device)
     name = torch.cuda.get_device_name(device)
-    if torch.version.hip is None and (major, minor) < (8, 9):
+    if not _is_rocm_torch(torch) and (major, minor) < (8, 9):
         raise RuntimeError(
             "Unsloth: float8_training needs compute capability 8.9+ (fp8 tensor cores); "
             f"{name} is {major}.{minor}. Train in bfloat16 / float16 instead."
         )
     if (
-        torch.version.hip is None
+        not _is_rocm_torch(torch)
         and _recipe_scaling(recipe) == "tensorwise"
         and (major, minor) < (9, 0)
     ):
@@ -299,10 +313,8 @@ def _check_hardware(
             f"8.9 ({name}). Train in bfloat16 instead."
         )
     if isinstance(recipe, str):
-        if torch.version.hip is not None or (major, minor) not in _MEASURED_FASTER.get(recipe, ()):
-            where = (
-                "ROCm" if torch.version.hip is not None else f"compute capability {major}.{minor}"
-            )
+        if _is_rocm_torch(torch) or (major, minor) not in _MEASURED_FASTER.get(recipe, ()):
+            where = "ROCm" if _is_rocm_torch(torch) else f"compute capability {major}.{minor}"
             raise RuntimeError(
                 f"Unsloth: float8_training = {recipe!r} has not been measured faster than bfloat16 on "
                 f"{name} ({where}); it is enabled by name only on RTX PRO 6000 / RTX 50 class GPUs "
@@ -320,12 +332,12 @@ def _check_hardware(
     except Exception as e:
         hint = ""
         if _recipe_scaling(recipe) == "rowwise" and (
-            torch.version.hip is not None or (major, minor) >= (9, 0)
+            _is_rocm_torch(torch) or (major, minor) >= (9, 0)
         ):
             # Some torch builds (e.g. the Windows wheels) ship only the tensorwise _scaled_mm kernel.
             # Below 9.0 tensorwise is refused above, so the hint is not offered there. The named recipe
             # (True) passes the gate only where it was measured faster; elsewhere point at the config.
-            if torch.version.hip is None and (major, minor) in _MEASURED_FASTER.get(
+            if not _is_rocm_torch(torch) and (major, minor) in _MEASURED_FASTER.get(
                 "tensorwise", ()
             ):
                 fallback = "float8_training = True (the tensorwise recipe)"
@@ -1146,7 +1158,7 @@ def enable_fp8_lora(
         if why is None and not allow_cpu:
             state = base.__dict__.get("_unsloth_fp8_lora")
             device = state.device if state is not None and state.offloaded else base.weight.device
-            if device.type != "cuda" or torch.version.hip is not None:
+            if device.type != "cuda" or _is_rocm_torch(torch):
                 why = f"weight on {device}"
             elif torch.cuda.get_device_capability(device) < ((8, 0) if int8 else (8, 9)):
                 why = "compute capability below " + ("8.0" if int8 else "8.9")

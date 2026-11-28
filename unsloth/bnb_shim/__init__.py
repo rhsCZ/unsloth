@@ -103,6 +103,19 @@ def _has_gpu():
         return False
 
 
+def _is_rocm_torch(torch):
+    # Inlined, not imported: tests load this file standalone. The +rocm version tag backs up a build that leaves
+    # torch.version.hip unset.
+    if getattr(torch.version, "hip", None):
+        return True
+    version = getattr(torch, "__version__", None)
+    if type(version) is not str:
+        version = getattr(getattr(torch, "version", None), "__version__", None)
+    if type(version) is not str:
+        version = str(version or "")
+    return "rocm" in version.lower()
+
+
 def _real_unusable():
     """Installed bitsandbytes that cannot run on this machine's CUDA / ROCm GPU: the import raises,
     or its native library did not load (bitsandbytes >= 0.46 then imports with throwing stubs)."""
@@ -110,7 +123,7 @@ def _real_unusable():
         import torch
         if not torch.cuda.is_available():
             return False
-        device_type = "hip" if torch.version.hip else "cuda"
+        device_type = "hip" if _is_rocm_torch(torch) else "cuda"
     except Exception:
         return False
     try:

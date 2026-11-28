@@ -5207,6 +5207,8 @@ class FastLlamaModel:
         prefetch_depth = prefetch_depth_arg(kwargs)
         # Merged QAT-LoRA (models/_qat_lora_merged.py); None reads UNSLOTH_QAT_LORA_MERGED. Not a LoraConfig field.
         qat_lora_merged = kwargs.pop("qat_lora_merged", None)
+        # QAT distillation (models/_qat_distill.py); Unsloth's own option, never a LoraConfig field.
+        qat_distill = kwargs.pop("qat_distill", None)
         # A pre-wrapped model returns early below, before patch_peft_model; reject before PEFT injects layers.
         reject_alora(model, kwargs.get("alora_invocation_tokens"))
         # PEFT < 0.21 drops a scalar layer 0 with layers_pattern.
@@ -5255,6 +5257,7 @@ class FastLlamaModel:
                 checkpoint_skip_layers = checkpoint_skip_layers,
                 prefetch_depth = prefetch_depth,
                 qat_lora_merged = qat_lora_merged,
+                qat_distill = qat_distill,
                 **kwargs,
             )
         if _is_full_finetuning(model):
@@ -5754,9 +5757,16 @@ class FastLlamaModel:
 
         if qat_scheme is not None:
             print("Unsloth: Applying QAT to mitigate quantization degradation")
+            from ._qat_distill import set_qat_distill
+
+            set_qat_distill(model, qat_distill)
             model = FastLlamaModel._prepare_for_qat(model, qat_scheme, lora_merged = qat_lora_merged)
         elif qat_lora_merged:
             raise ValueError("Unsloth: qat_lora_merged = True needs a qat_scheme.")
+        elif qat_distill not in (None, False):
+            raise ValueError(
+                "Unsloth: qat_distill distills a QAT model from its 16-bit base; pass qat_scheme too."
+            )
 
         model._saved_temp_tokenizer = _saved_temp_tokenizer
 

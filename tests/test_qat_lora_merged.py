@@ -82,7 +82,8 @@ def _model(
     monkeypatch.setenv("UNSLOTH_QAT_WEIGHT_MEMO", "0")
     scheme = _scheme(scheme)
     try:
-        return _prepare_model_for_qat(_peft(dtype, **kwargs), scheme, lora_merged = merged)
+        mode = {True: "merged", False: "base", None: None}[merged]
+        return _prepare_model_for_qat(_peft(dtype, **kwargs), scheme, lora_mode = mode)
     except (ImportError, NotImplementedError, RuntimeError) as exc:
         pytest.skip(f"{scheme} QAT unavailable here: {exc}")
 
@@ -335,20 +336,40 @@ def test_stripped_model_runs_plain_lora(scheme, monkeypatch):
         )
 
 
-def test_default_stays_base_only(monkeypatch):
-    monkeypatch.delenv("UNSLOTH_QAT_LORA_MERGED", raising = False)
-    model = _model("int4", monkeypatch, merged = None)
-    assert not any(isinstance(m, qlm.MergedLoRAWeightFakeQuantizer) for m in model.modules())
-    monkeypatch.setenv("UNSLOTH_QAT_LORA_MERGED", "1")
-    model = _model("int4", monkeypatch, merged = None)
-    assert sum(isinstance(m, qlm.MergedLoRAWeightFakeQuantizer) for m in model.modules()) == 2
+def test_modes_and_defaults(monkeypatch):
+    """get_peft_model defaults QAT + LoRA to merged ("auto"); qat_lora_mode = "base" keeps base-only QAT for a
+    quantized base served with an unmerged 16-bit adapter. Direct callers of _prepare_model_for_qat keep base."""
+    import inspect
+
+    import unsloth.models.llama as llama
+    import unsloth.models.vision as vision
+
+    monkeypatch.delenv("UNSLOTH_QAT_LORA_MODE", raising = False)
+    wrapped = lambda m: sum(isinstance(q, qlm.MergedLoRAWeightFakeQuantizer) for q in m.modules())
+    assert wrapped(_model("int4", monkeypatch, merged = None)) == 0
+    monkeypatch.setenv("UNSLOTH_QAT_LORA_MODE", "merged")
+    assert wrapped(_model("int4", monkeypatch, merged = None)) == 2
+    monkeypatch.delenv("UNSLOTH_QAT_LORA_MODE")
+    monkeypatch.setenv("UNSLOTH_QAT_WEIGHT_MEMO", "0")
+    auto = _prepare_model_for_qat(_peft(), "int4", lora_mode = None, lora_default = "auto")
+    assert wrapped(auto) == 2
+    base = _prepare_model_for_qat(_peft(), "int4", lora_mode = "base", lora_default = "auto")
+    assert wrapped(base) == 0
+    for module in (llama, vision):
+        assert 'lora_default = "auto"' in inspect.getsource(module)
+    with pytest.raises(ValueError, match = "qat_lora_mode"):
+        qlm.resolve_qat_lora_mode("sometimes")
 
 
 @pytest.mark.parametrize("kwargs", [{"dropout": 0.1}, {"use_dora": True}])
-def test_unmergeable_adapters_are_refused(kwargs, monkeypatch):
+def test_unmergeable_adapters_refuse_or_fall_back(kwargs, monkeypatch):
     monkeypatch.setenv("UNSLOTH_QAT_WEIGHT_MEMO", "0")
-    with pytest.raises(ValueError, match = "qat_lora_merged"):
-        _prepare_model_for_qat(_peft(**kwargs), "int4", lora_merged = True)
+    with pytest.raises(ValueError, match = "qat_lora_mode"):
+        _prepare_model_for_qat(_peft(**kwargs), "int4", lora_mode = "merged")
+    # The default ("auto") keeps training: base-only QAT, with a warning.
+    with pytest.warns(UserWarning, match = "base-only QAT"):
+        model = _prepare_model_for_qat(_peft(**kwargs), "int4", lora_mode = "auto")
+    assert not any(isinstance(q, qlm.MergedLoRAWeightFakeQuantizer) for q in model.modules())
 
 
 def test_round_inplace_skips_merged_layers(monkeypatch):
@@ -360,35 +381,41 @@ def test_round_inplace_skips_merged_layers(monkeypatch):
         assert quantizer.enabled and not quantizer.inner.__dict__.get("_unsloth_qat_rounded", False)
 
 
-def test_weight_memo_serves_one_residual_per_optimizer_step(monkeypatch):
-    from unsloth.models import _qat_weight_memo as memo
-
-    monkeypatch.setenv("UNSLOTH_QAT_WEIGHT_MEMO", "1")  # no budget, no arming step
-    model = _prepare_model_for_qat(_peft(), "int4", lora_merged = True)
+@pytest.mark.parametrize("scheme", ["int4", "fp8-fp8"])
+def test_merged_weight_computed_once_per_optimizer_step(scheme, monkeypatch):
+    model = _model(scheme, monkeypatch)
+    monkeypatch.setenv("UNSLOTH_QAT_WEIGHT_MEMO", "auto")
     model.train()
     params = [p for n, p in model.named_parameters() if "lora_" in n]
     optimizer = torch.optim.SGD(params, lr = 0.1)
     x = _x()
-    calls, hits = qlm.qat_lora_merged_stats()["calls"], memo.qat_weight_memo_stats()["hits"]
-    for _ in range(
-        3
-    ):  # gradient accumulation micro batches: computed twice (key, then store), then served
+    stats = qlm.merged_weight_cache_stats
+    computes = stats()["computes"]
+    model(x).square().mean().backward()  # before the first optimizer step: nothing cached
+    assert stats()["computes"] - computes == 2 and stats()["entries"] == 0
+    optimizer.step()
+    optimizer.zero_grad()
+    computes, hits = stats()["computes"], stats()["hits"]
+    for _ in range(3):  # gradient accumulation micro batches: one merge per layer, then served
         model(x).square().mean().backward()
-    assert qlm.qat_lora_merged_stats()["calls"] - calls == 4
-    assert memo.qat_weight_memo_stats()["hits"] - hits == 2
-    optimizer.step()  # in-place adapter update: new version, so no stale residual is served
-    calls = qlm.qat_lora_merged_stats()["calls"]
+    assert stats()["computes"] - computes == 2
+    assert stats()["hits"] - hits == 4
+    optimizer.step()  # in-place adapter update: new version, recomputed, never stale
+    computes = stats()["computes"]
     with torch.no_grad():
         out = model(x)
-    assert qlm.qat_lora_merged_stats()["calls"] - calls == 2
-    torch.testing.assert_close(out, _oracle_forward(model, x), rtol = 1e-5, atol = 1e-5)
-    with (
-        model.disable_adapter(),
-        torch.no_grad(),
-    ):  # the base-only output is not served for the merged one
-        base = model(x)
-    assert not torch.allclose(base, out)
-    memo.clear_qat_weight_memo(model)
+        assert stats()["computes"] - computes == 2
+        torch.testing.assert_close(out, _oracle_forward(model, x), rtol = 1e-5, atol = 1e-5)
+        with model.disable_adapter():  # the base-only output is not served for the merged one
+            assert not torch.allclose(model(x), out)
+        up = _lora_layers(model)[0]
+        up.merge()  # merge / unmerge rewrite W through .data: its cache is dropped
+        up.unmerge()
+        computes = stats()["computes"]
+        model(x)
+        assert stats()["computes"] - computes >= 1
+    qlm.clear_merged_weight_cache()
+    assert stats()["entries"] == 0 and stats()["bytes"] == 0
 
 
 def test_compiles_without_graph_breaks(monkeypatch):
@@ -419,7 +446,7 @@ def _sm100():
 @pytest.mark.parametrize("scheme", ["nvfp4", "mxfp8"])
 def test_microscaling_forward_is_the_merged_low_precision_matmul(scheme, monkeypatch):
     monkeypatch.setenv("UNSLOTH_QAT_WEIGHT_MEMO", "0")
-    model = _prepare_model_for_qat(_peft(torch.bfloat16).cuda(), scheme, lora_merged = True)
+    model = _prepare_model_for_qat(_peft(torch.bfloat16).cuda(), scheme, lora_mode = "merged")
     x = _x(torch.bfloat16).cuda().requires_grad_(True)
     up = _lora_layers(model)[0]
     base = up.get_base_layer()
@@ -439,3 +466,89 @@ def test_microscaling_forward_is_the_merged_low_precision_matmul(scheme, monkeyp
     xf, gf = x.detach().float(), grad.float()
     torch.testing.assert_close(gB.float(), s * gf.t() @ (xf @ A.float().t()), rtol = 3e-2, atol = 3e-2)
     torch.testing.assert_close(gA.float(), s * (gf @ B.float()).t() @ xf, rtol = 3e-2, atol = 3e-2)
+
+
+def test_merged_weight_cache_frees_with_the_model(monkeypatch):
+    import gc
+
+    monkeypatch.setenv("UNSLOTH_QAT_WEIGHT_MEMO", "1")
+    model = _model("int4", monkeypatch)
+    monkeypatch.setenv("UNSLOTH_QAT_WEIGHT_MEMO", "1")
+    qlm.clear_merged_weight_cache()
+    with torch.no_grad():
+        model(_x())
+    assert qlm.merged_weight_cache_stats()["entries"] == 2
+    del model
+    gc.collect()
+    assert qlm.merged_weight_cache_stats()["entries"] == 0
+
+
+@pytest.mark.parametrize("scheme", ["int8", "cactus", "int4", "fp8-fp8", "fp8-int4"])
+def test_exported_weights_are_bitwise_the_trained_fake_quant(scheme, monkeypatch):
+    """The torchao export merges in 16 bits and really quantizes with the training recipe's config: dequantized,
+    its weights are bitwise the merged fake quantized weights training used (same scales and granularity). The
+    flip: base-only QAT trained Q(W) + s B A, which is not the exported weight."""
+    from torchao.quantization import quantize_
+    from unsloth.models._utils import _merged_torchao_config_for_peft_qat
+    from unsloth.save import _merge_lora
+
+    model = _model(scheme, monkeypatch, dtype = torch.bfloat16)
+    config = _merged_torchao_config_for_peft_qat(model).quant_type
+    for proj in _lora_layers(model):
+        base = proj.get_base_layer()
+        A, B = proj.lora_A["default"].weight, proj.lora_B["default"].weight
+        s = proj.scaling["default"]
+        inner = base.weight_fake_quantizer.inner
+        trained = inner(qlm.qat_lora_merged_weight(base.weight, A, B, s))
+        base_only = inner(base.weight) + s * (B @ A).to(base.weight.dtype)
+        W, _ = _merge_lora(proj, "layer")
+        plain = torch.nn.Sequential(torch.nn.Linear(W.shape[1], W.shape[0], bias = False)).to(W.dtype)
+        with torch.no_grad():
+            plain[0].weight.copy_(W)
+        try:
+            quantize_(plain, config)
+            exported = plain[0].weight.dequantize()
+        except (ImportError, NotImplementedError, RuntimeError, AssertionError) as exc:
+            pytest.skip(f"{scheme} real quantization unavailable here: {exc}")
+        assert torch.equal(exported.to(trained.dtype), trained), (
+            (exported != trained).float().mean()
+        )
+        assert not torch.equal(exported.to(trained.dtype), base_only)
+
+
+@pytest.mark.skipif(not _sm100(), reason = "NVFP4 / MXFP8 QAT matmuls need compute capability 10.0+")
+@pytest.mark.parametrize("scheme", ["nvfp4", "mxfp8"])
+def test_microscaling_exported_weights_are_bitwise_the_trained_ones(scheme, monkeypatch):
+    from torchao.prototype.mx_formats.mx_tensor import MXTensor
+    from torchao.prototype.mx_formats.nvfp4_tensor import NVFP4Tensor, per_tensor_amax_to_scale
+    from torchao.quantization import quantize_
+    from unsloth.models._utils import _merged_torchao_config_for_peft_qat
+    from unsloth.save import _merge_lora
+
+    monkeypatch.setenv("UNSLOTH_QAT_WEIGHT_MEMO", "0")
+    model = _prepare_model_for_qat(_peft(torch.bfloat16).cuda(), scheme, lora_mode = "merged")
+    config = _merged_torchao_config_for_peft_qat(model).quant_type
+    for proj in _lora_layers(model):
+        base = proj.get_base_layer()
+        A, B = proj.lora_A["default"].weight, proj.lora_B["default"].weight
+        merged = qlm.qat_lora_merged_weight(base.weight, A, B, proj.scaling["default"])
+        wc = base.weight_config
+
+        def quantized(
+            w,
+        ):  # what the QAT forward quantizes the weight to (models/_utils.py, torchao QAT)
+            if scheme == "nvfp4":
+                scale = per_tensor_amax_to_scale(w.abs().max()) if wc.use_per_tensor_scale else None
+                return NVFP4Tensor.to_nvfp4(w, per_tensor_scale = scale).dequantize(w.dtype)
+            return MXTensor.to_mx(
+                w, elem_dtype = wc.dtype, block_size = wc.block_size, scaling_mode = wc.scaling_mode
+            ).dequantize(w.dtype)
+
+        W, _ = _merge_lora(proj, "layer")
+        plain = torch.nn.Sequential(torch.nn.Linear(W.shape[1], W.shape[0], bias = False)).to(W)
+        with torch.no_grad():
+            plain[0].weight.copy_(W)
+        quantize_(plain, config)
+        exported = plain[0].weight.dequantize(W.dtype)
+        assert torch.equal(exported, quantized(merged))
+        assert not torch.equal(exported, quantized(base.weight.detach()))

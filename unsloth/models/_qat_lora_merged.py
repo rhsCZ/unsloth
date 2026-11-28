@@ -20,9 +20,9 @@ quantized bases (int8 / fp8 activations) never take the fused kernels, and torch
 inside forward(): there the LoRA layer runs the base forward on Q(W + s B A), bit for bit the exported layer (the
 activation quantizer would amplify any rounding difference), and adds its adapter branch with value exactly 0 on
 a detached input to carry the gradients. Live memory: one weight-sized tensor per layer while autograd holds it
-(freed by gradient checkpointing, exactly like base-only QAT without the in-place rounding). The QAT weight memo
-(models/_qat_weight_memo.py) caches it, keyed on the adapter's storage and version, within its memory budget, so
-gradient accumulation micro batches and checkpoint replays reuse it until the optimizer step.
+(freed by gradient checkpointing, exactly like base-only QAT without the in-place rounding). It is computed
+once per optimizer step and layer and cached (see _cached), so gradient accumulation micro batches and
+checkpoint replays, compiled or not, reuse it until the adapter changes.
 
 The merge is the one save.py's _merge_lora writes (fp32 W^T + s A^T B^T, cast back), shared through
 qat_lora_merged_weight, so the exported 16-bit weights are bitwise the weights fake quantized in training.
@@ -35,20 +35,24 @@ import copy
 import functools
 import os
 import types
+import warnings
+import weakref
 
 import torch
 import torch.nn.functional as F
 
 __all__ = [
-    "qat_lora_merged_requested",
+    "resolve_qat_lora_mode",
     "qat_lora_merged_weight",
     "install_qat_lora_merged",
     "is_qat_lora_merged",
     "qat_lora_merged_stats",
     "nearest_merge_rounding",
+    "clear_merged_weight_cache",
+    "merged_weight_cache_stats",
 ]
 
-_ENV = "UNSLOTH_QAT_LORA_MERGED"
+_ENV = "UNSLOTH_QAT_LORA_MODE"
 _FLAG = "_unsloth_qat_lora_merged"
 _TEACHER = "_unsloth_qat_teacher"
 _MERGE_ROUNDING_ENV = "UNSLOTH_MERGE_ROUNDING"
@@ -57,13 +61,19 @@ _STATS = {"layers": 0, "microscaling": 0, "calls": 0}
 _TRUE = ("1", "true", "yes", "on")
 
 
-def qat_lora_merged_requested(value = None):
-    """The explicit argument when given, else UNSLOTH_QAT_LORA_MERGED."""
-    if value is not None:
-        if not isinstance(value, bool):
-            raise TypeError(f"Unsloth: qat_lora_merged must be True, False or None, got {value!r}.")
-        return value
-    return os.environ.get(_ENV, "0").strip().lower() in _TRUE
+_MODES = ("merged", "base", "auto")
+
+
+def resolve_qat_lora_mode(value = None, default = "auto"):
+    """`qat_lora_mode` for QAT + LoRA: "merged" (train Q(W + s B A); refuses adapters that cannot be merged),
+    "base" (fake quantize the frozen base only, for serving a quantized base with an unmerged 16-bit adapter,
+    e.g. vLLM --enable-lora), or "auto" (merged, falling back to base with a warning when the adapters cannot be
+    merged). None reads UNSLOTH_QAT_LORA_MODE, else `default`."""
+    if value is None:
+        value = os.environ.get(_ENV, "").strip().lower() or default
+    if not isinstance(value, str) or value.strip().lower() not in _MODES:
+        raise ValueError(f"Unsloth: qat_lora_mode must be one of {_MODES} or None, got {value!r}.")
+    return value.strip().lower()
 
 
 @contextlib.contextmanager
@@ -195,16 +205,166 @@ def _residual_eager(
     return merged.sub_(W).neg_().add_(quantized).to(quantized.dtype)
 
 
+# Per optimizer step cache of the merged weight, inside the opaque ops so compiled regions use it too: the
+# adapter changes only at the optimizer step, so gradient accumulation micro batches and gradient checkpointing
+# replays reuse one result per layer instead of re-merging and re-quantizing the weight each call. Keyed on the
+# storage and version counters of W, A and B (an optimizer step bumps A and B). Each call returns a clone, so
+# autograd and the compiler never hold the cached buffer itself: one weight-sized temporary per layer, plus the
+# cached copy. Nothing is cached before the first optimizer step (it shows the run's own peak memory), nor past
+# 90% of the device (the first step's peak plus the cache), nor while a CUDA graph is captured. A CUDA out of
+# memory error turns it off. UNSLOTH_QAT_WEIGHT_MEMO=0 turns it off, =1 lifts the memory limit.
+_CACHE = {}
+_CACHE_STATE = {
+    "steps": 0,
+    "hook": False,
+    "off": False,
+    "bytes": {},
+    "hits": 0,
+    "stores": 0,
+    "skips": 0,
+    "computes": 0,
+}
+_CACHE_DEVICE_FRACTION = 0.90
+
+
+def _memo_mode():
+    return os.environ.get("UNSLOTH_QAT_WEIGHT_MEMO", "auto").strip().lower()
+
+
+def _on_optimizer_step(optimizer, args, kwargs):
+    _CACHE_STATE["steps"] += 1
+
+
+def _install_cache_hook():
+    if _CACHE_STATE["hook"]:
+        return
+    try:
+        from torch.optim.optimizer import register_optimizer_step_post_hook
+        register_optimizer_step_post_hook(_on_optimizer_step)
+        _CACHE_STATE["hook"] = True
+    except Exception:
+        pass
+
+
+def clear_merged_weight_cache(weight = None):
+    """Drop every cached merged weight, or only those of the base weight `weight`."""
+    for slot in list(_CACHE):
+        if weight is None or slot[2] == weight.data_ptr():
+            entry = _CACHE.pop(slot)
+            device = slot[3]
+            _CACHE_STATE["bytes"][device] = _CACHE_STATE["bytes"].get(device, 0) - entry[2]
+
+
+def _armed():
+    try:
+        from ._qat_weight_memo import _steps_before_arming
+        needed = _steps_before_arming()
+    except Exception:
+        needed = 1
+    return _CACHE_STATE["steps"] >= needed
+
+
+def _cache_usable(W):
+    mode = _memo_mode()
+    if mode in ("0", "false", "off") or _CACHE_STATE["off"]:
+        if _CACHE:
+            clear_merged_weight_cache()
+        return False
+    if W.device.type == "cuda" and torch.cuda.is_current_stream_capturing():
+        return False
+    return mode in ("1", "true", "on") or _armed()
+
+
+def _cache_fits(device, nbytes):
+    if _memo_mode() in ("1", "true", "on") or device.type != "cuda":
+        return True
+    try:
+        total = torch.cuda.get_device_properties(device).total_memory
+        free, _ = torch.cuda.mem_get_info(device)
+        peak = torch.cuda.max_memory_reserved(device)
+    except Exception:
+        return False
+    used = _CACHE_STATE["bytes"].get(device, 0)
+    return peak + used + nbytes <= _CACHE_DEVICE_FRACTION * total and nbytes < free
+
+
+def _cached(kind, key, W, A, B, scale, compute_fn):
+    def compute():
+        _CACHE_STATE["computes"] += 1
+        return compute_fn()
+
+    if not _cache_usable(W):
+        return compute()
+    slot = (kind, key, W.data_ptr(), W.device, tuple(W.shape), W.dtype)
+    tag = (W._version, A.data_ptr(), A._version, B.data_ptr(), B._version, float(scale))
+    storages = (W.untyped_storage(), A.untyped_storage(), B.untyped_storage())
+    try:
+        entry = _CACHE.get(slot)
+        # Same storages, not only the same addresses: a freed model's memory may come back at the same pointers.
+        if (
+            entry is not None
+            and entry[0] == tag
+            and all(r() is t for r, t in zip(entry[3], storages))
+        ):
+            _CACHE_STATE["hits"] += 1
+            return entry[1].clone()
+        if entry is not None:
+            clear_merged_weight_cache_slot(slot)
+        out = compute()
+        nbytes = out.untyped_storage().nbytes()
+        if _cache_fits(W.device, nbytes):
+            # The base weight's storage going away (model deleted) frees its cached copy at once.
+            refs = (
+                weakref.ref(storages[0], functools.partial(_storage_freed, slot)),
+                weakref.ref(storages[1]),
+                weakref.ref(storages[2]),
+            )
+            _CACHE[slot] = (tag, out, nbytes, refs)
+            _CACHE_STATE["bytes"][W.device] = _CACHE_STATE["bytes"].get(W.device, 0) + nbytes
+            _CACHE_STATE["stores"] += 1
+            return out.clone()
+        _CACHE_STATE["skips"] += 1
+        return out
+    except torch.OutOfMemoryError:
+        _CACHE_STATE["off"] = True
+        clear_merged_weight_cache()
+        return compute()
+
+
+def _storage_freed(slot, ref):
+    entry = _CACHE.get(slot)
+    if entry is not None and entry[3][0] is ref:
+        clear_merged_weight_cache_slot(slot)
+
+
+def clear_merged_weight_cache_slot(slot):
+    entry = _CACHE.pop(slot, None)
+    if entry is not None:
+        _CACHE_STATE["bytes"][slot[3]] = _CACHE_STATE["bytes"].get(slot[3], 0) - entry[2]
+
+
+def merged_weight_cache_stats():
+    return {
+        "entries": len(_CACHE),
+        "bytes": sum(_CACHE_STATE["bytes"].values()),
+        **{k: _CACHE_STATE[k] for k in ("computes", "hits", "stores", "skips", "steps", "off")},
+    }
+
+
 @torch.library.custom_op("unsloth::qat_lora_merged_residual_v1", mutates_args = ())
 def _residual_op(
     W: torch.Tensor, A: torch.Tensor, B: torch.Tensor, scale: float, key: int
 ) -> torch.Tensor:
     quantizer = _QUANTIZERS[key]
-    try:
-        with torch.no_grad():
-            return _residual_eager(W, A, B, scale, quantizer, key)
-    finally:
-        _drop_qparams(quantizer)
+
+    def compute():
+        try:
+            with torch.no_grad():
+                return _residual_eager(W, A, B, scale, quantizer, key)
+        finally:
+            _drop_qparams(quantizer)
+
+    return _cached("residual", key, W, A, B, scale, compute)
 
 
 @_residual_op.register_fake
@@ -217,11 +377,15 @@ def _quantized_op(
     W: torch.Tensor, A: torch.Tensor, B: torch.Tensor, scale: float, key: int
 ) -> torch.Tensor:
     quantizer = _QUANTIZERS[key]
-    try:
-        with torch.no_grad():
-            return quantizer(_merged_fp32(W, A, B, scale).to(W.dtype))
-    finally:
-        _drop_qparams(quantizer)
+
+    def compute():
+        try:
+            with torch.no_grad():
+                return quantizer(_merged_fp32(W, A, B, scale).to(W.dtype))
+        finally:
+            _drop_qparams(quantizer)
+
+    return _cached("quantized", key, W, A, B, scale, compute)
 
 
 @_quantized_op.register_fake
@@ -233,7 +397,7 @@ def _(W, A, B, scale, key):
 def _merged_weight_op(
     W: torch.Tensor, A: torch.Tensor, B: torch.Tensor, scale: float
 ) -> torch.Tensor:
-    return qat_lora_merged_weight(W, A, B, scale)
+    return _cached("merged", -1, W, A, B, scale, lambda: qat_lora_merged_weight(W, A, B, scale))
 
 
 @_merged_weight_op.register_fake
@@ -281,17 +445,6 @@ class MergedLoRAWeightFakeQuantizer(torch.nn.Module):
     def extra_repr(self):
         return "merged LoRA: Q(W + s * B @ A) - s * B @ A"
 
-    def _unsloth_memo_extra_key(self):
-        """What the cached output (models/_qat_weight_memo.py) depends on besides W: the active adapter, by
-        storage and version, so an optimizer step (an in-place update) recomputes it."""
-        adapter = _active_adapter(self.__dict__["_lora_layer"])
-        if adapter is None:
-            return ("base",)
-        A, B, scale = adapter
-        if type(A.data) is not torch.Tensor or type(B.data) is not torch.Tensor:
-            return False
-        return (A.data_ptr(), A._version, B.data_ptr(), B._version, float(scale))
-
     def forward(self, W):
         inner = self.inner
         if not getattr(inner, "enabled", True):
@@ -326,6 +479,16 @@ def _exact_lora_forward(self, x, *args, **kwargs):
     name = next(a for a in self.active_adapters if a in self.lora_A)
     lora = self.lora_B[name](self.lora_A[name](x.detach().to(A.dtype))) * scale
     return out + (lora - lora.detach()).to(out.dtype)
+
+
+def _clearing(method):
+    def wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            clear_merged_weight_cache(self.get_base_layer().weight)
+
+    return wrapper
 
 
 def _refuse_mixed_batch(self, *args, **kwargs):
@@ -404,8 +567,9 @@ def _refusal(layer, name):
     return None
 
 
-def install_qat_lora_merged(model):
-    """Switch every LoRA Linear over a torchao QAT base to Q(W + s B A). Idempotent; returns the layer count."""
+def install_qat_lora_merged(model, strict = True):
+    """Switch every LoRA Linear over a torchao QAT base to Q(W + s B A). Idempotent; returns the layer count.
+    A layer that cannot be merged raises when `strict`, else leaves the whole model in base-only QAT (warning)."""
     try:
         from peft.tuners.lora import Linear as LoraLinear
     except Exception:
@@ -421,9 +585,19 @@ def install_qat_lora_merged(model):
             continue
         reason = _refusal(layer, name)
         if reason is not None:
-            raise ValueError(
-                "Unsloth: qat_lora_merged = True cannot train this model: " + reason + "."
+            if strict:
+                raise ValueError(
+                    "Unsloth: qat_lora_mode = 'merged' cannot train this model: " + reason + ". "
+                    "Pass qat_lora_mode = 'base' to fake quantize the frozen base only."
+                )
+            warnings.warn(
+                "Unsloth: QAT + LoRA trains the merged weight Q(W + s * B @ A) by default, but "
+                + reason
+                + ", so this model uses base-only QAT (qat_lora_mode = 'base'): its quantized merged export "
+                "will differ from the trained model.",
+                stacklevel = 3,
             )
+            return 0
         layers.append((layer, base, quantizer, weight_forward))
     count = microscaling = 0
     for layer, base, quantizer, weight_forward in layers:
@@ -441,12 +615,19 @@ def install_qat_lora_merged(model):
                 layer.__dict__["_unsloth_qat_lora_weight_forward"] = weight_forward
                 layer.forward = types.MethodType(_merged_microscaling_forward, layer)
             microscaling += 1
+        # PEFT merge / unmerge rewrite the base weight through .data (no version bump): drop its cache.
+        for name in ("merge", "unmerge"):
+            if name not in layer.__dict__:
+                setattr(layer, name, types.MethodType(_clearing(getattr(type(layer), name)), layer))
         # PEFT's per-row adapter selection would split what the merged weight fuses: refuse it.
         layer._mixed_batch_forward = types.MethodType(_refuse_mixed_batch, layer)
         layer.__dict__[_FLAG] = True
         count += 1
     _STATS["layers"] = count
     _STATS["microscaling"] = microscaling
+    if count:
+        _install_cache_hook()
+        _CACHE_STATE["steps"] = 0  # a new model profiles its own first step uncached
     if count:
         try:
             from ..precision import record

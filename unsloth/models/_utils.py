@@ -11256,7 +11256,8 @@ def _exclude_lora_adapters_from_qat(model, torchao_config) -> None:
 def _prepare_model_for_qat(
     model: torch.nn.Module,
     qat_scheme: Union[str, TorchAOConfig],
-    lora_merged: Optional[bool] = None,
+    lora_mode: Optional[str] = None,
+    lora_default: str = "base",
 ) -> torch.nn.Module:
     """Transform a model for Quantization-Aware Training: fake quantize the base (frozen) model during training, simulating quantization numerics in high precision (e.g. bf16) to mitigate post-training quantization degradation. Can be combined with LoRA; see https://dev-discuss.pytorch.org/t/speeding-up-qat-by-1-89x-with-lora/2700"""
     try:
@@ -11494,19 +11495,22 @@ def _prepare_model_for_qat(
     _reinstall_input_require_grads(require_grads_owners)
     _reregister_unowned_require_grads_hooks(model, all_embeddings, unowned_require_grads)
     _patch_microscaling_qat_forwards(model)
-    from ._qat_lora_merged import install_qat_lora_merged, qat_lora_merged_requested
+    from ._qat_lora_merged import install_qat_lora_merged, resolve_qat_lora_mode
 
-    if qat_lora_merged_requested(lora_merged):
+    # get_peft_model defaults to "auto" (merged); direct callers keep base-only QAT unless they ask.
+    lora_mode = resolve_qat_lora_mode(lora_mode, default = lora_default)
+    if lora_mode != "base":
         # Before the memo and the in-place rounding: both treat the base weight as the quantized one.
-        merged = install_qat_lora_merged(model)
+        merged = install_qat_lora_merged(model, strict = lora_mode == "merged")
         if merged:
             print(
-                f"Unsloth: merged QAT-LoRA on {merged} layers: training fake quantizes "
-                "W + s * B @ A, so the exported quantized model is the trained one."
+                f"Unsloth: QAT trains the merged weight Q(W + s * B @ A) on {merged} LoRA layers, so the "
+                "quantized merged export is the trained model. qat_lora_mode = 'base' fake quantizes the "
+                "frozen base only (quantized base + 16-bit adapter serving)."
             )
-        else:
+        elif lora_mode == "merged":
             warnings.warn(
-                "Unsloth: qat_lora_merged = True found no LoRA layer over a fake quantized base; "
+                "Unsloth: qat_lora_mode = 'merged' found no LoRA layer over a fake quantized base; "
                 "QAT trains the base only.",
                 stacklevel = 2,
             )

@@ -3982,9 +3982,12 @@ class FastLlamaModel:
     def _prepare_for_qat(
         model,
         qat_scheme,
-        lora_merged = None,
+        lora_mode = None,
+        lora_default = "base",
     ):
-        model = _prepare_model_for_qat(model, qat_scheme, lora_merged = lora_merged)
+        model = _prepare_model_for_qat(
+            model, qat_scheme, lora_mode = lora_mode, lora_default = lora_default
+        )
         return model
 
     @staticmethod
@@ -5205,8 +5208,9 @@ class FastLlamaModel:
     ):
         offload_layers = legacy_offload_layers(kwargs, offload_layers)
         prefetch_depth = prefetch_depth_arg(kwargs)
-        # Merged QAT-LoRA (models/_qat_lora_merged.py); None reads UNSLOTH_QAT_LORA_MERGED. Not a LoraConfig field.
-        qat_lora_merged = kwargs.pop("qat_lora_merged", None)
+        # QAT + LoRA mode (models/_qat_lora_merged.py): "merged" / "base" / "auto"; None reads
+        # UNSLOTH_QAT_LORA_MODE, else "auto" (merged). Not a LoraConfig field.
+        qat_lora_mode = kwargs.pop("qat_lora_mode", None)
         # A pre-wrapped model returns early below, before patch_peft_model; reject before PEFT injects layers.
         reject_alora(model, kwargs.get("alora_invocation_tokens"))
         # PEFT < 0.21 drops a scalar layer 0 with layers_pattern.
@@ -5254,7 +5258,7 @@ class FastLlamaModel:
                 offload_layers = offload_layers,
                 checkpoint_skip_layers = checkpoint_skip_layers,
                 prefetch_depth = prefetch_depth,
-                qat_lora_merged = qat_lora_merged,
+                qat_lora_mode = qat_lora_mode,
                 **kwargs,
             )
         if _is_full_finetuning(model):
@@ -5754,9 +5758,11 @@ class FastLlamaModel:
 
         if qat_scheme is not None:
             print("Unsloth: Applying QAT to mitigate quantization degradation")
-            model = FastLlamaModel._prepare_for_qat(model, qat_scheme, lora_merged = qat_lora_merged)
-        elif qat_lora_merged:
-            raise ValueError("Unsloth: qat_lora_merged = True needs a qat_scheme.")
+            model = FastLlamaModel._prepare_for_qat(
+                model, qat_scheme, lora_mode = qat_lora_mode, lora_default = "auto"
+            )
+        elif qat_lora_mode is not None:
+            raise ValueError("Unsloth: qat_lora_mode needs a qat_scheme.")
 
         model._saved_temp_tokenizer = _saved_temp_tokenizer
 

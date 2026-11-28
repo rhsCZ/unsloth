@@ -308,6 +308,21 @@ def run_rank(rank, port, queue, cases):
             raise
     # Every rank plans with the smallest free memory of any rank, so all pick the same tier.
     out["_min_over_ranks"] = af._min_over_ranks(1000 + 500 * rank, torch.device("cpu"))
+    # A failed agreement raises on the rank that saw it, never falls back to that rank's own budget.
+    dist = torch.distributed
+    real_all_reduce = dist.all_reduce
+
+    def failing_all_reduce(*args, **kwargs):
+        raise RuntimeError("all_reduce failed")
+
+    dist.all_reduce = failing_all_reduce
+    try:
+        af._min_over_ranks(1000 + 500 * rank, torch.device("cpu"))
+        out["_min_over_ranks_failure"] = "returned"
+    except RuntimeError as exc:
+        out["_min_over_ranks_failure"] = "raised" if "could not agree" in str(exc) else repr(exc)
+    finally:
+        dist.all_reduce = real_all_reduce
     for name, (ga, clip, sync, mp, arm) in cases.items():
         try:
             data = batches(2, ga)

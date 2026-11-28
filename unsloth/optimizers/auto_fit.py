@@ -243,17 +243,8 @@ def _is_dtensor(t):
 
 def _fsdp_calls_grad_hooks():
     """Whether this torch's FSDP2 runs a sharded parameter's post-accumulate-grad hooks once its reduce-scattered
-    gradient is assigned (foreach_reduce, torch 2.5+; torch 2.4's fully_shard does not). Read from the source where
-    it is readable, else by version."""
-    try:
-        try:
-            from torch.distributed.fsdp._fully_shard import _fsdp_collectives as module
-        except ImportError:
-            from torch.distributed._composable.fsdp import _fsdp_collectives as module
-        import inspect
-        return "_post_accumulate_grad_hooks" in inspect.getsource(module.foreach_reduce)
-    except Exception:
-        pass
+    gradient is assigned (foreach_reduce, torch 2.5+; torch 2.4's fully_shard does not). Decided by version, not by
+    reading torch's source: a refactor that moves the hook call into a helper keeps the behaviour."""
     try:
         major, minor = (int(x) for x in torch.__version__.split(".")[:2])
         return (major, minor) >= (2, 5)
@@ -892,9 +883,14 @@ class InBackwardOptimizer(torch.optim.Optimizer):
                 ratio = self._prev_total.to(norms.device) / prev_seen.clamp_min(1e-30)
                 total = torch.where(prev_seen > 0, torch.maximum(seen, seen * ratio), seen)
             coef = torch.clamp(max_norm / (total.sqrt() + 1e-6), max = 1.0)
+            per_tensor = False
             try:
                 torch._foreach_mul_(grads, coef)
             except (TypeError, RuntimeError):
+                # Mixed dtypes (or an OOM): retried per tensor below, once the handler and its traceback (which
+                # holds the frames' tensors) are gone, so the in-place retry does not run under that memory.
+                per_tensor = True
+            if per_tensor:
                 for g in grads:
                     g.mul_(coef.to(g.dtype))
 
@@ -1369,19 +1365,25 @@ def _usable_bytes(params, world = 1):
 
 def _min_over_ranks(value, device):
     """The smallest value over the ranks: every FSDP2 rank must pick the same tier (an in-backward rank runs
-    all-reduces a standard one never joins, and AdamW and SGD shards would train differently)."""
+    all-reduces a standard one never joins, and AdamW and SGD shards would train differently). A failed all_reduce
+    raises: falling back to this rank's own value would let the ranks pick different tiers and hang later."""
     try:
         import torch.distributed as dist
-
         if not (dist.is_available() and dist.is_initialized()) or dist.get_world_size() <= 1:
             return value
         backend = str(dist.get_backend()).lower()
-        on = device if "nccl" in backend else torch.device("cpu")
-        t = torch.tensor([int(value)], dtype = torch.int64, device = on)
-        dist.all_reduce(t, op = dist.ReduceOp.MIN)
-        return int(t.item())
     except Exception:
         return value
+    on = device if "nccl" in backend else torch.device("cpu")
+    t = torch.tensor([int(value)], dtype = torch.int64, device = on)
+    try:
+        dist.all_reduce(t, op = dist.ReduceOp.MIN)
+    except Exception as exc:
+        raise RuntimeError(
+            "Unsloth: the ranks could not agree on the auto-fit memory budget (all_reduce failed), so they could "
+            "pick different optimizer tiers."
+        ) from exc
+    return int(t.item())
 
 
 def _single_process(trainer):

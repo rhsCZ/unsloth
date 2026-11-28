@@ -1388,3 +1388,56 @@ def test_measuring_pass_does_not_recompile_the_real_pass(af, sr, monkeypatch, tm
         == graphs["in_backward", "exact"]
         == graphs["0", "estimate"]
     ), graphs
+
+
+def test_fsdp2_hook_support_is_decided_without_reading_torch_source(af, monkeypatch):
+    """The in-backward FSDP2 tier follows the torch version (2.5+), never the text of torch's foreach_reduce."""
+    import inspect
+
+    reads = []
+
+    def no_source(obj):
+        reads.append(obj)
+        raise OSError("source not available")
+
+    monkeypatch.setattr(inspect, "getsource", no_source)
+    major, minor = (int(x) for x in torch.__version__.split(".")[:2])
+    assert af._fsdp_calls_grad_hooks() is ((major, minor) >= (2, 5))
+    monkeypatch.setattr(af.torch, "__version__", "2.4.1+cu121")
+    assert af._fsdp_calls_grad_hooks() is False
+    monkeypatch.setattr(af.torch, "__version__", "2.6.0")
+    assert af._fsdp_calls_grad_hooks() is True
+    assert reads == []
+
+
+def test_clip_retries_per_tensor_outside_the_except(af, monkeypatch):
+    """A failed _foreach_mul_ (mixed dtypes, or an OOM) is retried per tensor after the handler has exited, so the
+    retry never runs while the failed call's traceback is alive."""
+    import sys
+    from types import SimpleNamespace
+
+    seen = []
+
+    class Grad:
+        def __init__(self, dtype):
+            self.dtype = dtype
+            self.scaled = None
+
+        def mul_(self, coef):
+            seen.append(sys.exc_info()[0])
+            self.scaled = float(coef)
+
+    def failing_foreach_mul_(grads, coef):
+        raise RuntimeError("CUDA out of memory")
+
+    monkeypatch.setattr(af.torch, "_foreach_mul_", failing_foreach_mul_)
+    grads = [Grad(torch.float32), Grad(torch.bfloat16)]
+    owner = SimpleNamespace(
+        max_grad_norm = 1.0,
+        clip = "exact",
+        _known_sq = torch.tensor(4.0),
+        _total_sq = lambda: torch.tensor(4.0),
+    )
+    af.InBackwardOptimizer._clip(owner, {"g": (grads, torch.tensor([2.0]), None)}, final = True)
+    assert seen == [None, None]
+    assert all(abs(g.scaled - 1.0 / (2.0 + 1e-6)) < 1e-6 for g in grads)

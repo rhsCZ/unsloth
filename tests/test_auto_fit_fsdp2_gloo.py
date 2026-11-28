@@ -166,3 +166,9 @@ def test_planner_reads_which_fsdp2_groups_stay_whole(results):
 
 def test_ranks_agree_on_the_memory_budget(results):
     assert results[0]["_min_over_ranks"] == results[1]["_min_over_ranks"] == 1000
+
+
+def test_a_failed_budget_agreement_raises(results):
+    assert (
+        results[0]["_min_over_ranks_failure"] == results[1]["_min_over_ranks_failure"] == "raised"
+    )
